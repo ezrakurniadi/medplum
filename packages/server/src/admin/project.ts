@@ -68,10 +68,21 @@ projectAdminRouter.get('/:projectId', async (req: Request, res: Response) => {
     project: {
       id: project.id,
       name: project.name,
+      setting: project.setting,
       secret: project.secret,
       site: project.site,
     },
   });
+});
+
+projectAdminRouter.post('/:projectId/settings', async (req: Request, res: Response) => {
+  const ctx = getAuthenticatedContext();
+  const result = await ctx.repo.updateResource({
+    ...ctx.project,
+    setting: req.body,
+  });
+
+  res.json(result);
 });
 
 projectAdminRouter.post('/:projectId/secrets', async (req: Request, res: Response) => {
@@ -204,18 +215,22 @@ projectAdminRouter.post('/:projectId/members/:membershipId/mfa/reset', async (re
   });
 
   if (user.email) {
-    await sendEmail(systemRepo, {
-      to: user.email,
-      subject: 'Your multi-factor authentication has been reset',
-      text: [
-        `Hello ${user.firstName ?? user.email},`,
-        '',
-        'A project administrator has reset your multi-factor authentication (MFA) enrollment.',
-        'You will need to re-enroll the next time you sign in.',
-        '',
-        'If you did not expect this change, please contact your administrator immediately.',
-      ].join('\n'),
-    });
+    await sendEmail(
+      systemRepo,
+      {
+        to: user.email,
+        subject: 'Your multi-factor authentication has been reset',
+        text: [
+          `Hello ${user.firstName ?? user.email},`,
+          '',
+          'A project administrator has reset your multi-factor authentication (MFA) enrollment.',
+          'You will need to re-enroll the next time you sign in.',
+          '',
+          'If you did not expect this change, please contact your administrator immediately.',
+        ].join('\n'),
+      },
+      ctx.project
+    );
   }
 
   sendOutcome(res, allOk);

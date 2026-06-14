@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { Logger } from '@medplum/core';
-import { deepClone, LRUCache, OperationOutcomeError, sleep, tooManyRequests } from '@medplum/core';
-import type { Project } from '@medplum/fhirtypes';
+import { deepClone, LRUCache, OperationOutcomeError, tooManyRequests } from '@medplum/core';
 import type { Response } from 'express';
 import type Redis from 'ioredis';
 import { RateLimiterRedis, RateLimiterRes } from 'rate-limiter-flexible';
@@ -20,12 +19,21 @@ export interface FhirQuotaConfig {
   projectLimit: number;
 }
 
-export function getFhirQuotaConfig(project: Project): FhirQuotaConfig {
-  const defaultUserLimit = project.systemSetting?.find((s) => s.name === 'userFhirQuota')?.valueInteger;
-  const userLimit = defaultUserLimit ?? getConfig().defaultFhirQuota ?? 50_000;
+export const FhirQuotaCost = {
+  READ: 1,
+  HISTORY: 10,
+  SEARCH: 20,
+  WRITE: 100,
+} as const;
 
-  const defaultProjectLimit = project.systemSetting?.find((s) => s.name === 'totalFhirQuota')?.valueInteger;
-  const projectLimit = defaultProjectLimit ?? userLimit * 10;
+export function getFhirQuotaConfig(authState: AuthState): FhirQuotaConfig {
+  const { project, userConfig } = authState;
+  const defaultUserLimit = project?.systemSetting?.find((s) => s.name === 'userFhirQuota')?.valueInteger;
+  const userSpecificLimit = userConfig.option?.find((o) => o.id === 'fhirQuota')?.valueInteger;
+  const userLimit = userSpecificLimit ?? defaultUserLimit ?? getConfig().defaultFhirQuota;
+
+  const perProjectLimit = project?.systemSetting?.find((s) => s.name === 'totalFhirQuota')?.valueInteger;
+  const projectLimit = perProjectLimit ?? userLimit * 10;
 
   return { userLimit, projectLimit };
 }
@@ -52,18 +60,10 @@ export class FhirRateLimiter {
   private delta: number;
   private logThreshold: number;
   private readonly enabled: boolean;
-  private readonly async: boolean;
 
   private readonly logger: Logger;
 
-  constructor(
-    redis: Redis,
-    authState: AuthState,
-    userLimit: number,
-    projectLimit: number,
-    logger: Logger,
-    async?: boolean
-  ) {
+  constructor(redis: Redis, authState: AuthState, userLimit: number, projectLimit: number, logger: Logger) {
     this.redis = redis;
     this.limiter = new RateLimiterRedis({
       keyPrefix: FHIR_RATE_LIMIT_MEMBERSHIP_PREFIX,
@@ -86,7 +86,6 @@ export class FhirRateLimiter {
     this.logger = logger;
     this.logThreshold = Math.floor(userLimit * 0.1); // Log requests that consume at least 10% of the user's total limit
     this.enabled = authState.project.systemSetting?.find((s) => s.name === 'enableFhirQuota')?.valueBoolean !== false;
-    this.async = async ?? false;
   }
 
   private setState(result: RateLimiterRes, ...others: RateLimiterRes[]): void {
@@ -120,13 +119,6 @@ export class FhirRateLimiter {
    * @param points - Number of rate limit points to consume
    */
   async consume(points: number): Promise<void> {
-    if (this.async) {
-      // Do not enforce rate limits in async context; instead, slow down the consumer
-      // in proportion to the weight of the operation being performed
-      await sleep(points * (getConfig().asyncDelayScaling ?? 1));
-      return;
-    }
-
     // If user is already over the limit, just block
     if (this.current && this.current.remainingPoints <= 0) {
       await this.block(points, this.current);
