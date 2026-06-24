@@ -4,10 +4,12 @@ import type { SearchRequest, WithId } from '@medplum/core';
 import {
   allOk,
   append,
+  concatUrls,
   flatMapFilter,
   getReferenceString,
   isReference,
   isResource,
+  isString,
   Operator,
   sortStringArray,
 } from '@medplum/core';
@@ -17,6 +19,7 @@ import type {
   Binary,
   Bundle,
   BundleEntry,
+  BundleLink,
   CompartmentDefinitionResource,
   DocumentReference,
   DocumentReferenceContent,
@@ -47,7 +50,8 @@ export interface PatientEverythingParameters {
   _since?: string;
   _count?: number;
   _offset?: number;
-  _type?: ResourceType[];
+  _cursor?: string;
+  _type?: ResourceType[] | string;
   _inlineAttachments?: boolean;
 }
 
@@ -67,6 +71,7 @@ export async function patientEverythingHandler(req: FhirRequest): Promise<FhirRe
 
   // _inlineAttachments is a Medplum extension not in the standard OperationDefinition.
   params._inlineAttachments = isPatientEverythingInlineAttachmentsEnabled(req, ctx.repo);
+  params._cursor = getStringQueryParam(req, '_cursor');
 
   // First read the patient to verify access
   const patient = await ctx.repo.readResource<Patient>('Patient', id);
@@ -90,11 +95,14 @@ export async function getPatientEverything(
   patient: WithId<Patient>,
   params?: PatientEverythingParameters
 ): Promise<Bundle<WithId<Resource>>> {
+  const types = normalizeTypes(params?._type);
+
   // First get all compartment resources
   const search: Partial<SearchRequest> = {
-    types: params?._type,
+    types: types.length > 0 ? types : undefined,
     count: params?._count,
     offset: params?._offset,
+    cursor: params?._cursor,
   };
   if (params?._since) {
     search.filters = append(search.filters, {
@@ -104,6 +112,7 @@ export async function getPatientEverything(
     });
   }
   const bundle = await searchPatientCompartment(repo, patient, search);
+  rewritePatientEverythingLinks(bundle, patient, params);
 
   // Filter by requested date range
   filterByCareDate(bundle, params?.start, params?.end);
@@ -118,6 +127,67 @@ export async function getPatientEverything(
   }
 
   return bundle;
+}
+
+function rewritePatientEverythingLinks(
+  bundle: Bundle<WithId<Resource>>,
+  patient: WithId<Patient>,
+  params: PatientEverythingParameters | undefined
+): void {
+  if (!bundle.link?.length) {
+    return;
+  }
+
+  bundle.link = bundle.link.map((link) => rewritePatientEverythingLink(link, patient, params));
+}
+
+function rewritePatientEverythingLink(
+  link: BundleLink,
+  patient: WithId<Patient>,
+  params: PatientEverythingParameters | undefined
+): BundleLink {
+  const searchUrl = new URL(link.url);
+  const url = new URL(concatUrls(getConfig().baseUrl, `/fhir/R4/Patient/${patient.id}/$everything`));
+
+  setSearchParam(url, 'start', params?.start);
+  setSearchParam(url, 'end', params?.end);
+  setSearchParam(url, '_since', params?._since);
+  setSearchParam(url, '_count', searchUrl.searchParams.get('_count') ?? params?._count);
+  setSearchParam(url, '_offset', searchUrl.searchParams.get('_offset'));
+  setSearchParam(url, '_cursor', searchUrl.searchParams.get('_cursor'));
+
+  const types = normalizeTypes(params?._type);
+  if (types.length > 0) {
+    url.searchParams.set('_type', types.join(','));
+  }
+
+  if (params?._inlineAttachments) {
+    url.searchParams.set('_inlineAttachments', 'true');
+  }
+
+  return { ...link, url: url.toString() };
+}
+
+function setSearchParam(url: URL, name: string, value: string | number | undefined | null): void {
+  if (value !== undefined && value !== null && value !== '') {
+    url.searchParams.set(name, String(value));
+  }
+}
+
+function getStringQueryParam(req: FhirRequest, name: string): string | undefined {
+  const value = req.query?.[name];
+  if (Array.isArray(value)) {
+    return value.find(isString);
+  }
+  return isString(value) ? value : undefined;
+}
+
+function normalizeTypes(types: PatientEverythingParameters['_type']): ResourceType[] {
+  if (!types) {
+    return [];
+  }
+  const values = Array.isArray(types) ? types : [types];
+  return flatMapFilter(values, (type) => type.split(',').filter(Boolean) as ResourceType[]);
 }
 
 function isPatientEverythingInlineAttachmentsEnabled(req: FhirRequest, repo: Repository): boolean {
@@ -137,7 +207,8 @@ export async function searchPatientCompartment(
   const resourceList = getPatientCompartments().resource as CompartmentDefinitionResource[];
   const types = search?.types ?? flatMapFilter(resourceList, (r) => (r.code === 'Binary' ? undefined : r.code));
   types.push(target.resourceType);
-  sortStringArray(types);
+  const uniqueTypes = Array.from(new Set(types));
+  sortStringArray(uniqueTypes);
 
   const filters = search?.filters ?? [];
   filters.push({
@@ -149,11 +220,12 @@ export async function searchPatientCompartment(
   // Get initial bundle of compartment resources
   return repo.search({
     resourceType: target.resourceType,
-    types,
+    types: uniqueTypes,
     filters,
     count: search?.count ?? defaultMaxResults,
     offset: search?.offset,
-    sortRules: [{ code: '_id' }], // Must make sort deterministic to ensure that pagination works correctly
+    cursor: search?.cursor,
+    sortRules: [{ code: '_lastUpdated' }],
   });
 }
 
