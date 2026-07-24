@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { WithId } from '@medplum/core';
-import { OAuthTokenAuthMethod } from '@medplum/core';
+import { ContentType, OAuthTokenAuthMethod } from '@medplum/core';
 import type { ClientApplication, DomainConfiguration, Project, ProjectMembership, User } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import express from 'express';
 import request from 'supertest';
+import { vi } from 'vitest';
 import { createClient } from '../admin/client';
 import { inviteUser } from '../admin/invite';
 import { initApp, shutdownApp } from '../app';
@@ -13,10 +14,11 @@ import { getConfig, loadTestConfig } from '../config/loader';
 import type { SystemRepository } from '../fhir/repo';
 import { getProjectSystemRepo } from '../fhir/repo';
 import { withTestContext } from '../test.setup';
+import { mockFetchJson, mockFetchText } from '../test.setup.fetch';
 import { registerNew } from './register';
 
+const fetchMock = vi.spyOn(globalThis, 'fetch');
 const app = express();
-const fetchMock = jest.spyOn(globalThis, 'fetch') as unknown as jest.Mock;
 const domain = randomUUID() + '.example.com';
 const email = `text@${domain}`;
 const domain2 = randomUUID() + '.example.com';
@@ -103,19 +105,19 @@ describe('External', () => {
 
   test('Missing code', async () => {
     const res = await request(app).get('/auth/external?code=&state=xyz');
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Missing code');
   });
 
   test('Missing state', async () => {
     const res = await request(app).get('/auth/external?code=xyz&state=');
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Missing state');
   });
 
   test('Invalid JSON state', async () => {
     const res = await request(app).get('/auth/external?code=xyz&state=xyz');
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Invalid state');
   });
 
@@ -127,7 +129,7 @@ describe('External', () => {
     });
 
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Identity provider not found');
   });
 
@@ -139,7 +141,7 @@ describe('External', () => {
     });
 
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Identity provider not found');
   });
 
@@ -151,15 +153,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('not-found@' + domain),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('not-found@' + domain)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('User not found');
   });
 
@@ -171,15 +169,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(undefined),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(undefined)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('External token does not contain email address');
   });
 
@@ -191,15 +185,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('admin@medplum.com'),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('admin@medplum.com')));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Email address does not match domain');
   });
 
@@ -214,15 +204,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual('localhost:3000');
@@ -243,15 +229,11 @@ describe('External', () => {
       });
 
       // Mock the external identity provider
-      fetchMock.mockImplementation(() => ({
-        ok: true,
-        status: 200,
-        json: () => buildTokens(email),
-      }));
+      fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
       // Simulate the external identity provider callback
       const res = await request(app).get(url);
-      expect(res.status).toBe(302);
+      expect(res).toHaveStatus(302);
 
       const redirect = new URL(res.header.location);
       expect(redirect.host).toStrictEqual('localhost:3000');
@@ -269,15 +251,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual(domain);
@@ -292,15 +270,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual(domain);
@@ -315,15 +289,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Identity provider not found');
   });
 
@@ -334,15 +304,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Invalid project');
   });
 
@@ -353,15 +319,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Invalid redirect URI');
   });
 
@@ -372,17 +334,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => {
-        throw new Error('Invalid JSON');
-      },
-    }));
+    fetchMock.mockImplementation(() => mockFetchText('invalid', { contentType: ContentType.JSON }));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Failed to verify code - check your identity provider configuration');
   });
 
@@ -393,23 +349,48 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('test@' + domain),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     await request(app).get(url);
 
     // Verify fetch was called with Accept-Encoding: identity to prevent gzip responses
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetch).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         headers: expect.objectContaining({
           'Accept-Encoding': 'identity',
         }),
       })
+    );
+  });
+
+  test('Insecure token URL is passed to fetch', async () => {
+    const insecureAuthClient = await withTestContext(async () => {
+      const client = await createClient(systemRepo, {
+        project,
+        name: 'Insecure External Auth Client',
+        redirectUri,
+      });
+      return systemRepo.updateResource<ClientApplication>({
+        ...client,
+        identityProvider: {
+          ...identityProvider,
+          tokenUrl: 'http://localhost:8080/oauth2/token',
+        },
+      });
+    });
+    const url = appendQueryParams('/auth/external', {
+      code: randomUUID(),
+      state: JSON.stringify({ redirectUri, clientId: insecureAuthClient.id }),
+    });
+
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('test@' + domain)));
+    fetchMock.mockClear();
+    await request(app).get(url);
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/oauth2/token',
+      expect.objectContaining({ method: 'POST' })
     );
   });
 
@@ -446,15 +427,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('', externalId),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('', externalId)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual(domain);
@@ -502,15 +479,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('', externalId),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('', externalId)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Invalid redirect URI');
   });
 
@@ -546,15 +519,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('', externalId),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('', externalId)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('Invalid redirect URI');
   });
 
@@ -590,15 +559,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(undefined, ''),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(undefined, '')));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(400);
+    expect(res).toHaveStatus(400);
     expect(res.body.issue[0].details.text).toBe('External token does not contain subject');
   });
 
@@ -635,15 +600,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual(domain);
@@ -690,14 +651,10 @@ describe('External', () => {
       state: JSON.stringify({ domain: testDomain, returnTo: allowedReturnTo + '/dashboard' }),
     });
 
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(testEmail),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(testEmail)));
 
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.hostname).toStrictEqual('myapp.example.com');
@@ -713,14 +670,10 @@ describe('External', () => {
       state: JSON.stringify({ domain, returnTo: 'https://evil.example.com/steal' }),
     });
 
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(email),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(email)));
 
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual('localhost:3000');
@@ -762,14 +715,10 @@ describe('External', () => {
       }),
     });
 
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens(testEmail),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens(testEmail)));
 
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     // Should fall back to default signin, NOT redirect to evil.com
     const redirect = new URL(res.header.location);
@@ -834,15 +783,11 @@ describe('External', () => {
     });
 
     // Mock the external identity provider
-    fetchMock.mockImplementation(() => ({
-      ok: true,
-      status: 200,
-      json: () => buildTokens('', externalId),
-    }));
+    fetchMock.mockImplementation(() => mockFetchJson(buildTokens('', externalId)));
 
     // Simulate the external identity provider callback
     const res = await request(app).get(url);
-    expect(res.status).toBe(302);
+    expect(res).toHaveStatus(302);
 
     const redirect = new URL(res.header.location);
     expect(redirect.host).toStrictEqual(domain);

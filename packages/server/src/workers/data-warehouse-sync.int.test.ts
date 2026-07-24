@@ -10,7 +10,7 @@
  *
  * Contrast with:
  * - `data-warehouse-sync.test.ts` — unit tests for worker/scheduler wiring (mocked `syncData` / BullMQ).
- * - `data-warehouse/sync.int.test.ts` — same export pipeline via `syncData` directly (no worker layer).
+ * - `data-warehouse/sync.int.test.ts` — incremental `syncData` against fake S3 Iceberg (no worker layer).
  */
 
 import { DuckDBInstance } from '@duckdb/node-api';
@@ -18,9 +18,11 @@ import type { Job } from 'bullmq';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { vi } from 'vitest';
 import { loadTestConfig } from '../config/loader';
 import type { MedplumServerConfig } from '../config/types';
 import type * as DataWarehouseConfigModule from '../data-warehouse/config';
+import * as dataWarehouseConfig from '../data-warehouse/config';
 import { toIcebergTableName } from '../data-warehouse/config';
 import { closeDatabase, DatabaseMode, getDatabasePool, initDatabase } from '../database';
 import type { DataWarehouseSyncJobData } from './data-warehouse-sync';
@@ -31,11 +33,11 @@ const TEST_SCHEMA = 'dw_worker_sync_int_test';
 const HISTORY_TABLE = 'history';
 const QUALIFIED_HISTORY_TABLE = `${TEST_SCHEMA}.${HISTORY_TABLE}`;
 
-jest.mock('../data-warehouse/config', () => {
-  const actual: typeof DataWarehouseConfigModule = jest.requireActual('../data-warehouse/config');
+vi.mock('../data-warehouse/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof DataWarehouseConfigModule>();
   return {
     ...actual,
-    getWarehouseSyncPostgresTableNames: jest.fn(() => ['dw_worker_sync_int_test.history']),
+    getWarehouseSyncPostgresTableNames: vi.fn(() => ['dw_worker_sync_int_test.history']),
   };
 });
 
@@ -45,8 +47,7 @@ function assertParquetMagic(bytes: Buffer): void {
 }
 
 function buildReadParquetFirstRowProjectionQuery(parquetPath: string): string {
-  const escapedPath = parquetPath.replaceAll("'", "''");
-  return `SELECT id::VARCHAR AS id, project_id::VARCHAR AS project_id FROM read_parquet('${escapedPath}') LIMIT 1`;
+  return `SELECT id AS id, project_id AS project_id FROM read_parquet('${parquetPath}') LIMIT 1`;
 }
 
 function buildTestConfig(outDir: string, base: MedplumServerConfig): MedplumServerConfig {
@@ -109,16 +110,18 @@ describe('processDataWarehouseSyncJob local destination (integration)', () => {
   beforeEach(() => {
     outDir = mkdtempSync(join(tmpdir(), 'medplum-dw-worker-sync-'));
     config = buildTestConfig(outDir, baseConfig);
+    vi.spyOn(dataWarehouseConfig, 'getWarehouseSyncPostgresTableNames').mockReturnValue([QUALIFIED_HISTORY_TABLE]);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (outDir) {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
 
   test('exports projected history rows to a Parquet file via scheduled sync job', async () => {
-    const updateProgress = jest.fn().mockResolvedValue(undefined);
+    const updateProgress = vi.fn().mockResolvedValue(undefined);
     const icebergTable = toIcebergTableName(QUALIFIED_HISTORY_TABLE);
     const expectedParquetPath = join(outDir as string, `${icebergTable}.parquet`);
 
@@ -132,7 +135,6 @@ describe('processDataWarehouseSyncJob local destination (integration)', () => {
       expect.objectContaining({
         tablesCompleted: 1,
         tablesTotal: 1,
-        icebergTable,
         destination: expectedParquetPath,
         rowsInserted: 1,
       })

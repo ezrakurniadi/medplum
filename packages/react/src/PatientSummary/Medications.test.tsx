@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import { createReference } from '@medplum/core';
-import type { MedicationRequest } from '@medplum/fhirtypes';
+import type { MedicationRequest, MedicationStatement } from '@medplum/fhirtypes';
 import { HomerSimpson, MockClient } from '@medplum/mock';
 import { MedplumProvider } from '@medplum/react-hooks';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router';
 import { act, fireEvent, render, screen, selectAutocompleteOption } from '../test-utils/render';
 import { Medications } from './Medications';
 
@@ -14,11 +13,7 @@ const medplum = new MockClient();
 describe('PatientSummary - Medications', () => {
   async function setup(children: ReactNode): Promise<void> {
     await act(async () => {
-      render(
-        <MemoryRouter>
-          <MedplumProvider medplum={medplum}>{children}</MedplumProvider>
-        </MemoryRouter>
-      );
+      render(<MedplumProvider medplum={medplum}>{children}</MedplumProvider>);
     });
   }
 
@@ -56,6 +51,55 @@ describe('PatientSummary - Medications', () => {
     );
     expect(screen.getByText('Medications')).toBeInTheDocument();
     expect(screen.getByText('Tylenol')).toBeInTheDocument();
+  });
+
+  test('Renders medication statements', async () => {
+    await setup(
+      <Medications
+        patient={HomerSimpson}
+        medicationRequests={[]}
+        medicationStatements={[
+          {
+            resourceType: 'MedicationStatement',
+            id: 'statement-1',
+            status: 'active',
+            subject: createReference(HomerSimpson),
+            medicationCodeableConcept: { text: 'Atorvastatin' },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Medications')).toBeInTheDocument();
+    expect(screen.getByText('Atorvastatin')).toBeInTheDocument();
+    expect(screen.getByText('active')).toBeInTheDocument();
+  });
+
+  test('Medication statement click calls onClickResource', async () => {
+    const onClickResource = vi.fn();
+    const medicationStatement: MedicationStatement = {
+      resourceType: 'MedicationStatement',
+      id: 'statement-1',
+      status: 'active',
+      subject: createReference(HomerSimpson),
+      medicationCodeableConcept: { text: 'Atorvastatin' },
+    };
+
+    await setup(
+      <Medications
+        patient={HomerSimpson}
+        medicationRequests={[]}
+        medicationStatements={[medicationStatement]}
+        onClickResource={onClickResource}
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Atorvastatin'));
+    });
+
+    expect(onClickResource).toHaveBeenCalledWith(medicationStatement);
+    expect(screen.queryByText('Edit Medication')).not.toBeInTheDocument();
   });
 
   test('Add medication', async () => {

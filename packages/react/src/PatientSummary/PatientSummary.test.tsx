@@ -3,7 +3,6 @@
 import { createReference } from '@medplum/core';
 import { HomerSimpson, MockClient } from '@medplum/mock';
 import { MedplumProvider } from '@medplum/react-hooks';
-import { MemoryRouter } from 'react-router';
 import { act, render, screen } from '../test-utils/render';
 import type { PatientSummaryProps } from './PatientSummary';
 import { PatientSummary } from './PatientSummary';
@@ -29,11 +28,9 @@ describe('PatientSummary', () => {
   async function setup(args: PatientSummaryProps): Promise<void> {
     await act(async () => {
       render(
-        <MemoryRouter>
-          <MedplumProvider medplum={medplum}>
-            <PatientSummary {...args} />
-          </MedplumProvider>
-        </MemoryRouter>
+        <MedplumProvider medplum={medplum}>
+          <PatientSummary {...args} />
+        </MedplumProvider>
       );
     });
   }
@@ -488,6 +485,10 @@ describe('PatientSummary', () => {
 
     expect(MedicationsSection.key).toBe('medications');
     expect(MedicationsSection.title).toBe('Medications');
+    expect(MedicationsSection.searches).toEqual([
+      { key: 'medicationRequests', resourceType: 'MedicationRequest', patientParam: 'subject' },
+      { key: 'medicationStatements', resourceType: 'MedicationStatement', patientParam: 'subject' },
+    ]);
 
     expect(LabsSection.key).toBe('labs');
     expect(LabsSection.searches).toHaveLength(2);
@@ -588,11 +589,9 @@ describe('PatientSummary', () => {
   test('Renders null when patient cannot be resolved', async () => {
     const { container } = await act(async () => {
       return render(
-        <MemoryRouter>
-          <MedplumProvider medplum={medplum}>
-            <PatientSummary patient={{ reference: 'Patient/does-not-exist-xyz' }} />
-          </MedplumProvider>
-        </MemoryRouter>
+        <MedplumProvider medplum={medplum}>
+          <PatientSummary patient={{ reference: 'Patient/does-not-exist-xyz' }} />
+        </MedplumProvider>
       );
     });
 
